@@ -51,7 +51,7 @@ export function Welcome() {
         <h1>Aquarium Shop</h1>
         <p className="muted">Bills, stock and a GST helper for a small ornamental fish shop in Telangana or Andhra Pradesh. Sign in with the Google account that should own the books. The sheet is created in that account's Drive.</p>
         {shop.configured ? (
-          <button className="btn btn-primary btn-lg" type="button" onClick={() => void shop.signIn()}>
+          <button className="btn btn-primary btn-lg" type="button" onClick={() => shop.signIn()}>
             Sign in with Google
           </button>
         ) : (
@@ -61,7 +61,12 @@ export function Welcome() {
         )}
         <a className="btn" href={`${base}?demo=1#/setup`}>Try a demo on this device</a>
         <a className="btn btn-ghost" href="#/setup">Shop details</a>
-        {shop.notice ? <ErrorBox>{shop.notice}</ErrorBox> : null}
+        {shop.notice ? (
+          <ErrorBox>
+            <span>{shop.notice}</span>
+            {shop.noticeRaw ? <p className="small" style={{ margin: "8px 0 0", fontWeight: 500 }}>{shop.noticeRaw}</p> : null}
+          </ErrorBox>
+        ) : null}
         <p className="small muted">Nothing is sent to a server we run. Demo mode stays on this phone. This is not certified GST software.</p>
       </div>
     </div>
@@ -90,7 +95,7 @@ export function Lock() {
         </Field>
         {error ? <ErrorBox>{error}</ErrorBox> : null}
         <button className="btn btn-primary btn-lg" type="submit">Unlock</button>
-        <button className="btn btn-ghost" type="button" onClick={() => void shop.forgotPin().catch((err) => setError(err instanceof Error ? err.message : "Could not reset the PIN."))}>
+        <button className="btn btn-ghost" type="button" onClick={() => shop.forgotPin()}>
           I forgot the PIN
         </button>
         <p className="small muted">Forgot it? Sign in again with the Google account that owns this shop, or clear the demo PIN on this device.</p>

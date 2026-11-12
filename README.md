@@ -51,7 +51,7 @@ The OAuth Web client ID is one public line in [`src/config.ts`](src/config.ts) (
   - `https://karthikvepuriphoto-gif.github.io`
   - `http://localhost:5173`
 - Enabled APIs: Google Drive API, Google Sheets API
-- Scopes at sign-in: `openid`, `email`, `profile` (`userinfo.email`, `userinfo.profile`), and `https://www.googleapis.com/auth/drive.file`
+- Scopes at sign-in: `openid`, `email`, `profile` (`userinfo.email`, `userinfo.profile`), and `https://www.googleapis.com/auth/drive.file`. On the Google consent screen, the Drive box must stay ticked. Aquarium Shop only creates files it can see with `drive.file`; it does not ask for access to the rest of Drive.
 
 If `GOOGLE_CLIENT_ID` is cleared, the app shows a setup message instead of crashing. Replace that one line and redeploy if the client ID ever changes.
 

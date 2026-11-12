@@ -2,6 +2,7 @@ import { DATA_FILE_NAME, DATA_FOLDER, SHEET_TABS } from "../config";
 import { DEFAULT_SETTINGS, type CounterRow, type Snapshot } from "../engine";
 import { TABLE_COLUMNS, TABLE_NAMES, type Col } from "../schema";
 import { AuthExpiredError, OfflineError } from "./errors";
+import { GoogleApiError, parseGoogleError } from "./googleError";
 
 interface DriveFile {
   id: string;
@@ -26,16 +27,10 @@ async function gfetch(token: string, url: string, init: RequestInit = {}): Promi
   if (response.status === 401) throw new AuthExpiredError();
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(googleMessage(response.status, detail));
+    const parsed = parseGoogleError(response.status, detail);
+    throw new GoogleApiError(parsed.hint, parsed.raw);
   }
   return response;
-}
-
-function googleMessage(status: number, detail: string): string {
-  if (status === 403) {
-    return "Google Drive refused this. Sign in again and allow Aquarium Shop to create files in your Drive.";
-  }
-  return `Google could not save (${status}). ${detail.slice(0, 160)}`;
 }
 
 function escapeName(name: string): string {
@@ -89,7 +84,13 @@ async function batchUpdate(token: string, id: string, requests: unknown[]) {
   });
 }
 
-/** Create the workbook on first sign-in, or reopen the one this app already created. */
+/**
+ * First-run Drive layout. Every call stays inside drive.file:
+ * files.list only returns files this app created, files.create makes the
+ * Aquarium Shop folder and the spreadsheet (parent is that folder), and
+ * Sheets reads and writes that same spreadsheet. No about, permissions,
+ * or changes calls, and no files the app did not create.
+ */
 export async function ensureWorkbook(token: string, existingId?: string): Promise<{ spreadsheetId: string; folderId: string }> {
   const folderId = await ensureFolder(token);
   let spreadsheetId = existingId || "";

@@ -2,8 +2,9 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { isGoogleConfigured } from "./config";
 import { ShopEngine, type Snapshot } from "./engine";
 import { sampleItems } from "./logic";
-import { fetchEmail, getValidToken, invalidateToken, peekToken, rememberEmail } from "./lib/auth";
+import { fetchEmail, getValidToken, invalidateToken, peekToken, rememberEmail, requestTokenFromTap, warmGoogleSignIn } from "./lib/auth";
 import { AuthExpiredError, OfflineError } from "./lib/errors";
+import { GoogleApiError, shouldAskConsentAgain, signInPrompt } from "./lib/googleError";
 import { loadBlob, saveBlob, type OutboxOp } from "./lib/idb";
 import { claimsMatch, createExportSheet, ensureWorkbook, readSnapshot, sheetUrl, writeSnapshot } from "./lib/sheets";
 
@@ -74,12 +75,13 @@ interface ShopValue {
   syncLabel: string;
   sheetUrl: string;
   notice: string;
+  noticeRaw: string;
   toast: string;
   boot: Boot | null;
-  signIn: () => Promise<void>;
+  signIn: () => void;
   signOut: () => void;
   run: (action: string, payload?: Record<string, unknown>) => Promise<unknown>;
-  forgotPin: () => Promise<void>;
+  forgotPin: () => void;
   exportSheet: (kind: string, month: string) => Promise<string>;
   read: (action: string, payload?: Record<string, unknown>) => unknown;
   ping: (message: string) => void;
@@ -150,6 +152,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
   const folderId = useRef("");
   const googleToken = useRef("");
   const emailRef = useRef("");
+  const consentRetry = useRef(false);
   const chain = useRef(Promise.resolve());
   const [booted, setBooted] = useState(false);
   const [entered, setEntered] = useState(false);
@@ -157,6 +160,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
   const [sync, setSync] = useState<SyncState>(demo ? "demo" : "saved");
   const [url, setUrl] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeRaw, setNoticeRaw] = useState("");
   const [toast, setToast] = useState("");
   const [pinToken, setPinToken] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
@@ -173,6 +177,16 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       folderId: folderId.current || undefined,
       email: emailRef.current || undefined,
     });
+  }
+
+  function showNotice(hint: string, raw = "") {
+    setNotice(hint);
+    setNoticeRaw(raw);
+  }
+
+  function clearNotice() {
+    setNotice("");
+    setNoticeRaw("");
   }
 
   function adoptPin() {
@@ -227,7 +241,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         return;
       }
       setSync("waiting");
-      setNotice("Waiting to sync. If two phones saved a bill at the same moment, wait a few seconds and open the app again.");
+      showNotice("Waiting to sync. If two phones saved a bill at the same moment, wait a few seconds and open the app again.");
     } catch (error) {
       if (error instanceof AuthExpiredError && !retried) {
         try {
@@ -245,7 +259,8 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         return;
       }
       setSync("waiting");
-      if (!(error instanceof OfflineError)) setNotice(error instanceof Error ? error.message : "Waiting to sync");
+      if (error instanceof GoogleApiError) showNotice(error.message, error.raw);
+      else if (!(error instanceof OfflineError)) showNotice(error instanceof Error ? error.message : "Waiting to sync");
     }
   }
 
@@ -283,6 +298,10 @@ export function ShopProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    if (!demo && configured) warmGoogleSignIn();
+  }, [demo, configured]);
+
+  useEffect(() => {
     let live = true;
     (async () => {
       adoptPin();
@@ -301,7 +320,11 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (!configured || !peekToken()) {
-        if (live) setBooted(true);
+        if (live) {
+          clearNotice();
+          setBooted(true);
+        }
+        if (!demo && configured) warmGoogleSignIn();
         return;
       }
       try {
@@ -309,7 +332,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         if (!live) return;
         await openAccount(google);
       } catch {
-        if (live) setNotice("");
+        if (live) clearNotice();
       } finally {
         if (live) setBooted(true);
       }
@@ -363,18 +386,30 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     return result.data;
   }
 
-  async function signIn() {
-    setNotice("");
-    try {
-      const google = await getValidToken({ interactive: true });
-      await openAccount(google);
-      setBooted(true);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Sign in again.";
-      setNotice(`${message} If Google says the app is not verified, add this Gmail as a test user on the Aquarium Shop Cloud project.`);
-      setSync("signin");
-      setEntered(false);
-    }
+  function signIn() {
+    clearNotice();
+    const prompt = signInPrompt(consentRetry.current);
+    void requestTokenFromTap(prompt)
+      .then(async (google) => {
+        consentRetry.current = false;
+        await openAccount(google);
+        setBooted(true);
+      })
+      .catch((error: unknown) => {
+        if (shouldAskConsentAgain(error)) consentRetry.current = true;
+        if (error instanceof GoogleApiError) {
+          showNotice(error.message, error.raw);
+        } else {
+          const message = error instanceof Error ? error.message : "Sign in again.";
+          const extra =
+            error instanceof AuthExpiredError
+              ? " If Google says the app is not verified, add this Gmail as a test user on the Aquarium Shop Cloud project."
+              : "";
+          showNotice(`${message}${extra}`);
+        }
+        setSync("signin");
+        setEntered(false);
+      });
   }
 
   function signOut() {
@@ -387,21 +422,33 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     emailRef.current = "";
   }
 
-  async function forgotPin() {
+  function forgotPin() {
     if (demo) {
       if (!window.confirm("Remove the demo PIN on this device?")) return;
-    } else {
-      const google = await getValidToken({ interactive: true });
-      googleToken.current = google;
+      finishForgotPin();
+      return;
     }
+    void requestTokenFromTap(signInPrompt(consentRetry.current))
+      .then((google) => {
+        googleToken.current = google;
+        finishForgotPin();
+      })
+      .catch((error: unknown) => {
+        if (shouldAskConsentAgain(error)) consentRetry.current = true;
+        showNotice(error instanceof Error ? error.message : "Sign in again.", error instanceof GoogleApiError ? error.raw : "");
+      });
+  }
+
+  function finishForgotPin() {
     engine.clearPin();
     writePinToken(null);
     setPinToken(null);
     outbox.current.push({ id: crypto.randomUUID(), action: "setPin", payload: { remove: true, bookedAt: new Date().toISOString() } });
-    await persist();
-    if (!demo) enqueueFlush();
-    else setSync("demo");
-    setTick((n) => n + 1);
+    void persist().then(() => {
+      if (!demo) enqueueFlush();
+      else setSync("demo");
+      setTick((n) => n + 1);
+    });
   }
 
   async function exportSheet(kind: string, month: string) {
@@ -434,6 +481,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     syncLabel: syncLabel(sync),
     sheetUrl: url,
     notice,
+    noticeRaw,
     toast,
     boot,
     signIn,
