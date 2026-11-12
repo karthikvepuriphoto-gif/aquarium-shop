@@ -71,12 +71,20 @@ export function App() {
               <div className="error-box banner">
                 <div>
                   <strong>Sign in again</strong>
-                  <p>Google needs a fresh sign-in before new bills can reach your Drive. What you already entered stays on this phone.</p>
-                  <button className="btn btn-primary" type="button" onClick={() => void shop.signIn()}>Sign in again</button>
+                  <p>{shop.notice || "Google needs a fresh sign-in before new bills can reach your Drive. What you already entered stays on this phone."}</p>
+                  {shop.noticeRaw ? <p className="small" style={{ margin: "8px 0 0", fontWeight: 500 }}>{shop.noticeRaw}</p> : null}
+                  <button className="btn btn-primary" type="button" onClick={() => shop.signIn()}>Sign in again</button>
                 </div>
               </div>
             ) : null}
-            {shop.notice && shop.sync === "waiting" ? <div className="note banner"><span>{shop.notice}</span></div> : null}
+            {shop.notice && shop.sync === "waiting" ? (
+              <div className="note banner">
+                <span>
+                  {shop.notice}
+                  {shop.noticeRaw ? <span className="small" style={{ display: "block", marginTop: 6 }}>{shop.noticeRaw}</span> : null}
+                </span>
+              </div>
+            ) : null}
             {page}
           </main>
         </div>
